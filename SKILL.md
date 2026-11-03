@@ -27,6 +27,12 @@ thousand times changes nothing. That is not a flaky failure, it is a missing pre
 3. **Never trust memory for capabilities or entitlements.** Capabilities come from
    `capabilities --json`, entitlement from `entitlement get`. Never describe "cannot read the
    purchase state" as "you need to pay".
+4. **Never edit the app's data by hand.** There is exactly one way to change SplitJam's
+   content — through the `splitjam` CLI. Do **not** read, edit, rename, or delete files in the
+   app's group container, `~/Library/Containers/…`, `~/Library/Application Support/…`, or the
+   bridge directory (`inbox/` / `working/` / `outbox/`), and do not write requests into the
+   mailbox by hand. Editing app data directly can corrupt state and defeats every guard above;
+   route everything through the CLI's commands and flags instead.
 
 ## 1. Getting started
 
