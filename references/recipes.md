@@ -1,82 +1,84 @@
 # Playbooks
 
-Each playbook is a complete chain you can type as-is, including the failure branches. When you
-forget a flag, come back and copy.
+Each playbook is a complete chain, including the failure branches. Arguments are JSON as a
+tool would receive them; `project` is omitted in a single-project setup.
 
 ## A. Build a practice version from scratch
 
-Goal: 92 BPM, downbeat at 0.35s, keep drums and bass, cut one chorus section.
+Goal: 92 BPM, downbeat at 0.35 s, keep drums and bass, cut one chorus section.
 
-```bash
-splitjam --json doctor                       # 1 precondition: must be running
-splitjam --json project list                 # 2 find the project id
-splitjam --json project get <id>             # 3 inspect tracks and whether a grid exists
+```
+ping                                                  # 1 precondition: server up, token ok
+project_list          {}                              # 2 find the project id
+project_get           { project: "<id>" }             # 3 tracks, and whether a grid exists
 
-splitjam --json beat get --project <id>      # 4 check mode
-splitjam --json beat mode --mode tap --project <id>
-splitjam --json beat bpm 92 --project <id>
-splitjam --json beat anchor set --at 0.35 --project <id>
-splitjam --json beat get --project <id>      # 5 verify applied.bpm
+beat_get              { project: "<id>" }             # 4 check mode
+beat_mode             { project: "<id>", mode: "tap" }
+beat_bpm              { project: "<id>", bpm: 92 }
+beat_anchor           { project: "<id>", at: "0.35" }
+beat_get              { project: "<id>" }             # 5 verify applied.bpm
 
-splitjam --json track mute stem:guitar --project <id>
-splitjam --json track mute stem:vocals --project <id>
+track_mute            { project: "<id>", track: "stem:guitar" }
+track_mute            { project: "<id>", track: "stem:vocals" }
 # mute the rest the same way; do not fake multi-solo
 
-splitjam --json section create --start 72 --end 96 --title Chorus --project <id>
-splitjam --json project get <id>             # 6 final revision for the report
+section_create        { project: "<id>", start: 72, end: 96, title: "Chorus" }
+project_get           { project: "<id>" }             # 6 final revision for the report
 ```
 
 Failure branches:
-- step 4 shows `mode` already `tap` → skip the mode line;
-- `beat bpm` returns `E_MODE` → still in automatic mode, go back one step;
-- `beat anchor` returns `E_ANCHOR_FAR` → the time is too far from a beat; pick a closer one or
-  stay in tap mode;
-- `section create` returns `E_PRO_REQUIRED` → **stop**, report per §5 of SKILL.md, never delete
-  existing sections to make room.
+- step 4 shows `mode` already `tap` → skip the mode call;
+- `beat_bpm` returns `E_MODE` → still in automatic mode, go back one step;
+- `beat_anchor` returns `E_ANCHOR_FAR` → the time is too far from a beat; pick a closer one
+  or stay in tap mode;
+- `section_create` returns `E_PRO_REQUIRED` → **stop**, report per §5 of SKILL.md, never
+  delete existing sections to make room.
 
 ## B. Cut several sections
 
-```bash
-splitjam --json beat get --project <id>                 # bar length = 60/bpm*beatsPerBar
-splitjam --json section list --project <id>              # how many are used (free tier: 3)
-splitjam --json section create --start 72 --end 84 --title "Chorus 1" --project <id> --dry-run
-splitjam --json section create --start 72 --end 84 --title "Chorus 1" --project <id> --yes
+```
+beat_get        { project: "<id>" }                                   # bar length = 60/bpm*beatsPerBar
+section_list    { project: "<id>" }                                   # how many are used (free tier: 3)
+section_create  { project: "<id>", start: 72, end: 84, title: "Chorus 1", dryRun: true }
+section_create  { project: "<id>", start: 72, end: 84, title: "Chorus 1" }
 ```
 
-Always `--dry-run` first. Overlapping sections are neither merged nor rejected — compute the
+Always `dryRun` first. Overlapping sections are neither merged nor rejected — compute the
 ranges yourself and mention any overlap in the report so the user is not surprised later.
+Deleting is different: `section_delete` needs `confirm: true` **and** the Edit + delete tier.
 
 ## C. Mixer-only changes
 
-```bash
-splitjam --json track list --project <id>
-splitjam --json track pan "Lead Guitar" --value -0.3 --project <id>
-splitjam --json track gain stem:drums --value 1.4 --project <id>
-splitjam --json track get "Lead Guitar" --project <id>
+```
+track_list    { project: "<id>" }
+track_pan     { project: "<id>", track: "Lead Guitar", value: -0.3 }
+track_gain    { project: "<id>", track: "stem:drums", value: 1.4 }
+track_get     { project: "<id>", track: "Lead Guitar" }
 ```
 
-When `track gain` returns `W_CLAMPED`, the report must carry both numbers: "you asked for 1.4,
-the free tier caps at 1.0, 1.0 was written". Never say "set to 1.4".
+When `track_gain` returns `W_CLAMPED`, the report must carry both numbers: "you asked for
+1.4, the free tier caps at 1.0, 1.0 was written". Never say "set to 1.4".
 
 ## D. Export a slice for an external tool
 
-```bash
-splitjam --json track audio file stem:drums --project <id>          # does the asset exist
-splitjam --json track audio peaks stem:drums --buckets 800 --project <id>
-splitjam --json track audio slice stem:drums --range 12-24 --out ~/Desktop/drums-12-24.wav --project <id>
+```
+track_audio_file   { project: "<id>", track: "stem:drums" }               # does the asset exist
+track_audio_peaks  { project: "<id>", track: "stem:drums", buckets: 800 }
+track_audio_slice  { project: "<id>", track: "stem:drums", range: "12-24" }
 ```
 
-At most 300 seconds per call. For a whole song, state the plan first ("N slices, each X long"),
-then do it.
+At most 300 seconds per call, 8 MB inline. For a whole song, state the plan first ("N
+slices, each X long"), then do it. The WAV arrives as an `audio` content block; `file` and
+`path` in the envelope are names inside the app's container, not a path you can open.
 
 ## E. Handling a free-tier wall
 
-```bash
-splitjam --json entitlement get
+```
+entitlement_get   {}
 # look at weekly_separation_limit / stem_split_pro / multi_stem_export / multiple_sections
-splitjam --json section create --start 0 --end 10 --title A --project <id>
+section_create    { project: "<id>", start: 0, end: 10, title: "A" }
 # if it returns E_PRO_REQUIRED
-splitjam --json entitlement get            # confirm reason: entitlement or quota
+entitlement_get   {}          # confirm reason: entitlement or quota
 ```
 
 Then do exactly one thing: state the conclusion and stop.
@@ -90,12 +92,12 @@ limit, no pushing the upgrade.
 
 ## F. Revision conflict
 
-```bash
-splitjam --json track pan stem:bass --value 0.2 --project <id> --expect-revision 7f3a91c2
+```
+track_pan    { project: "<id>", track: "stem:bass", value: 0.2, expectRevision: "7f3a91c2" }
 # E_CONFLICT_REVISION; error.hint carries the current revision
-splitjam --json project get <id>            # re-read and see what changed
+project_get  { project: "<id>" }          # re-read and see what changed
 # write again with the new revision
 ```
 
 A conflict means someone changed the project after your read — usually the user, in the UI.
-Do **not** drop `--expect-revision` and write anyway; that overwrites their edit.
+Do **not** drop `expectRevision` and write anyway; that overwrites their edit.

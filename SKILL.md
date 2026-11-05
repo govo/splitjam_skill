@@ -1,157 +1,189 @@
 ---
 name: splitjam
-description: Drive the running SplitJam / StemsPlayer app on macOS with the local `splitjam` CLI — read projects, set per-track gain/pan/mute/solo/fold, retune the beat grid (mode, BPM, meter, multiplier, anchor, beat lines, accent, snap), control the metronome, manage practice sections, edit chord display and per-bar notes, read lyrics, and export waveform peaks or WAV slices. Use when the user asks to "set the BPM to 92", "put the downbeat at 0.35s", "mute the bass", "solo the drums", "pan the lead guitar left", "hide the guitar lane", "set the gain to 1.4", "make a chorus section from 1:12 to 1:36", "slow the whole song down", "shift the pitch down two semitones", "show me the drums waveform", "export 12 to 24 seconds", "read the lyrics", or otherwise operate SplitJam from the terminal. Requires SplitJam to be running with Command Line Access on; the CLI talks to it over loopback HTTP (127.0.0.1) with a bearer token and needs no system permission. This skill never launches the app and never polls.
+description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server — read projects, set per-track gain/pan/mute/solo/fold, retune the beat grid (mode, BPM, meter, multiplier, anchor, beat lines, accent, snap), control the metronome, manage practice sections, edit chord display and per-bar notes, read lyrics, and export waveform peaks or WAV slices. Use when the user asks to "set the BPM to 92", "put the downbeat at 0.35s", "mute the bass", "solo the drums", "pan the lead guitar left", "hide the guitar lane", "set the gain to 1.4", "make a chorus section from 1:12 to 1:36", "slow the whole song down", "shift the pitch down two semitones", "show me the drums waveform", "export 12 to 24 seconds", or "read the lyrics" in SplitJam. Requires SplitJam running with Settings → MCP Server on, and that server (http://127.0.0.1:48321/mcp) registered in the agent's MCP config with its bearer token. This skill never launches the app and never polls.
 metadata:
-  version: "0.3.0"
-  requires: splitjam 0.3.0+
-compatibility: macOS 13+ with SplitJam.app running, and `splitjam` on PATH (brew tap govo/tap && brew trust govo/tap && brew install splitjam). SplitJam → Settings → Command Line Access must be on, and its token copied once via `splitjam auth --token <token>`.
-allowed-tools: Bash(splitjam:*) Bash(${CLAUDE_SKILL_DIR}/scripts/*)
+  version: "1.0.0"
+  requires: SplitJam with the MCP server (schema 3, 54 tools)
 ---
 
-# SplitJam CLI
+# SplitJam over MCP
 
-`splitjam` talks to the running app over **loopback HTTP**: `127.0.0.1` on port 48321 (probed
-upward if taken), authenticated with a bearer token. No network, no ports open to the LAN, no
-daemon, and **no system permission**: the CLI never reads the app's container, so macOS never
-asks the user to grant it access to another app's data.
+The app hosts a **Model Context Protocol server** on `127.0.0.1:48321/mcp` (Streamable
+HTTP, JSON-RPC 2.0) and exposes **54 tools**. There is no CLI to install and no
+intermediate binary: an agent that has this server in its config calls the tools directly.
 
-**So the app must be running.** When it is not, nothing is listening and the request never
-happens — retrying a thousand times changes nothing. That is not a flaky failure, it is a
-missing precondition.
+Everything happens on this Mac. No network, no upload, no daemon, no TCC permission — the
+server only listens on loopback, and access is decided by one bearer token.
+
+**So the app must be running, with the server switched on.** When it is not, nothing
+answers and the request never happens — retrying a thousand times changes nothing. That is
+not a flaky failure, it is a missing precondition.
 
 ## 0. The hard rules
 
-1. **Run `doctor` first.** Every task, every session.
-2. **On `E_APP_NOT_RUNNING` / `E_APP_NOT_READY`, stop.** The only advice is "open SplitJam and
-   keep it running (the window may be minimized, but do not quit), then retry". Do **not**
-   launch the app yourself and do **not** poll. Say that nothing was modified.
-3. **Never trust memory for capabilities or entitlements.** Capabilities come from
-   `capabilities --json`, entitlement from `entitlement get`. Never describe "cannot read the
-   purchase state" as "you need to pay".
+1. **Check the link before working.** One `ping` (or `project_list`) is enough. It proves the
+   server answers, the token is accepted, and — with `project_list` — that the project you are
+   about to touch actually exists.
+2. **If the tools are missing or the call cannot connect, stop.** Two cases, two answers:
+   - the tool list has no `project_list` / `track_gain` → this server is not registered in
+     your MCP client;
+   - the call fails at the transport level (connection refused, 401) → the app is closed,
+     the server is off, or the token is stale.
+
+   Both are fixed in the app (**Settings → MCP Server**), by the user. Do **not** launch the
+   app, do **not** poll, do **not** read the app's container instead. Say that nothing was
+   modified.
+3. **Never trust memory for capabilities or entitlements.** The tool list comes from
+   `tools/list`; what an op needs comes from `capabilities`; whether the user has Pro comes
+   from `entitlement_get`. Never describe "cannot read the purchase state" as "you need to
+   pay".
 4. **Never touch the app's data by hand.** There is exactly one way to change SplitJam's
-   content — the `splitjam` CLI. Do not read, edit, or delete files in the app's group
-   container, `~/Library/Containers/…`, or `~/Library/Application Support/…`; on macOS 15+ the
-   OS blocks it anyway, and on macOS 27 it does so silently. Route everything through commands.
+   content: these tools. Do not read, edit, or delete files under
+   `~/Library/Containers/…`, `~/Library/Application Support/…` or the app's exports folder;
+   on macOS 15+ the OS blocks it anyway, and on some versions it does so silently. Route
+   everything through tools.
 5. **Never ask the user for Full Disk Access.** If something is blocked, the answer is a
-   different command, not a bigger permission.
+   different tool, not a bigger permission.
+6. **On `E_PRO_REQUIRED`, stop.** The app has already shown its own upgrade prompt. Do not
+   retry the same call, and never dodge the limit — no lower tier, no splitting one
+   multi-stem export into ten single-stem ones.
 
-## 1. Getting started
+## 1. Connecting (and diagnosing a broken connection)
 
-```bash
-splitjam doctor                      # endpoint, token, presence, entitlement
-splitjam auth --status               # where the token comes from, is it accepted
-splitjam ping                        # one round trip
-splitjam project list                # omit --project when only one project exists
-splitjam capabilities --json         # every command with requires / constraint / mutates
+Registration needs exactly two values, both in **SplitJam → Settings → MCP Server**:
+
+| Value | Where | Shape |
+| --- | --- | --- |
+| endpoint | the status row, and **Copy** | `http://127.0.0.1:48321/mcp` |
+| token | the token row, **Copy** | 64 hex chars; sent as `Authorization: Bearer <token>` |
+
+A client config entry looks like this (Claude Code / Cursor style; other clients differ in
+syntax only):
+
+```json
+{
+  "mcpServers": {
+    "splitjam": {
+      "type": "http",
+      "url": "http://127.0.0.1:48321/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
 ```
 
-**First run only:** the token lives inside the app's sandbox, so it cannot be read from disk.
-Ask the user to copy it from **SplitJam → Settings → Command Line Access → Copy CLI token**,
-then run:
+When a client will not connect, one script answers "which part is broken" without any
+guesswork:
 
 ```bash
-splitjam auth --token <token>        # stored in ~/.config/splitjam/config.json (0600)
+SPLITJAM_TOKEN=<token> ./scripts/doctor.sh
 ```
 
-**If the app moved ports** (48321 was taken, or two SplitJam instances are running), do not hunt
-by hand: `splitjam doctor --json` lists every instance it found and the one it selected. The CLI
-probes the range, then sends a token-authenticated `ping` to each candidate — only the instance
-that accepts the token is used, and among several it prefers the most recently launched one.
-Pin a port only when that is wrong: `splitjam auth --port 48323` (undo with `--port auto`).
+It prints presence, app version, protocol, permission tier, tool count, and one verdict
+with the fix. `scripts/mcp.py` is the same caller underneath — `health`, `tools`, `call`,
+`snapshot`. Use it for diagnosis only; a working MCP client does not need it.
 
-## 2. Global flags
+Common causes, in the order they actually happen:
 
-| Flag | Effect |
-| --- | --- |
-| `--json` | machine-readable envelope. **Always pass it** (works for `doctor` too) |
-| `--project <id\|name>` | target project; optional when there is only one. Accepts an id prefix |
-| `--expect-revision <r>` | optimistic lock: fail if the project changed since revision `r` (exit 5) |
-| `--dry-run` | validate and report, write nothing |
-| `--yes` | confirm a destructive operation (`section delete`) |
-| `--strict` | reject instead of clamping at the free-tier limit |
-| `--no-app-prompt` | do not raise the in-app upsell prompt |
-| `--timeout <s>` | request timeout, default 15 |
-| `--port <n>` | **pin** the automation port — connects only there, no probing. Omit to auto-discover 48321–48330 |
-| `--token <t>` | one-off token override (prefer `splitjam auth`) |
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| connection refused | app closed, or the server is off | open the app, keep it running, turn the switch on |
+| 401 on every call | token stale (regenerated, or server toggled) | copy the current token into the client config |
+| server fails to start, card says the port is taken | a second SplitJam instance, or another process, holds 48321 | quit whatever holds the port, then toggle **MCP Server** off and on — the port is fixed, there is no port setting to change |
+| tools listed but every write returns `E_FORBIDDEN` | permission tier is **Read only** | raise it in the card |
 
-Flags may appear before or after the command.
+The port does **not** roll forward. The URL is written into client configs, so 48321 is the
+only port; if it is taken the app reports the failure instead of silently moving.
 
-Exit codes: `0` ok · `2` argument · `3` app not running/ready · `4` not found · `5` conflict ·
-`6` entitlement · `7` timeout · `8` schema mismatch · `9` auth/internal · `10` permission.
-`doctor` uses the same codes, so a script can branch on it without parsing text. Details in
-`references/contracts.md`.
+## 2. Arguments every tool shares
+
+| Argument | Applies to | Effect |
+| --- | --- | --- |
+| `project` | almost all | target project; **omit it when the app has exactly one**. Accepts a UUID, a UUID prefix, an exact name, or a unique substring |
+| `dryRun` | every writing tool | validate — entitlement, permission and revision checks all run, nothing is written; the result comes back with `"dryRun": true` |
+| `expectRevision` | every writing tool | optimistic lock: fail with `E_CONFLICT_REVISION` if the project changed since the revision you read |
+| `confirm` | `section_delete` | required in addition to the tier; deleting a section is irreversible |
+| `strict` | `track_gain`, `mixer_speed` | refuse instead of clamping at the free-tier limit |
+| `noAppPrompt` | any | do not raise the in-app upsell prompt. Undocumented on purpose: it is for agents that already explained the wall, not for hiding it |
+
+There are no global flags, no exit codes and no `--json`: every tool returns the same JSON
+envelope as its single text content. `--json` became the default, `--yes` became
+`confirm`, `--dry-run` became `dryRun`, `--expect-revision` became `expectRevision`.
 
 ## 3. The loop: read → check → write → read back
 
-Before writing, **read the current state** (`track list`, `beat get`, `section list`,
-`chord get`). Take the revision from that read, then write, then read again to confirm what
-actually landed. Never guess an id or a track name.
+Before writing, **read the current state** (`project_get`, `track_list`, `beat_get`,
+`section_list`, `chord_get`). Take the revision from that read, then write, then read again
+to confirm what actually landed. Never guess an id or a track name.
 
-```bash
-# 1 read
-splitjam --json project list
-splitjam --json track list --project <id>
-# 2 write, guarded by the revision you just read
-splitjam --json track pan "Lead Guitar" --value -0.3 --project <id> --expect-revision <rev>
-# 3 read back
-splitjam --json track get "Lead Guitar" --project <id>
+```
+project_list            {}                                  → pick the project id
+track_list              { project: "<id>" }                  → see gain / pan / mute / fold
+track_pan               { project: "<id>", track: "Lead Guitar", value: -0.3,
+                          expectRevision: "<rev>" }          → write
+track_get               { project: "<id>", track: "Lead Guitar" }  → read back
 ```
 
-When writing several times to the same project, carry the previous response's `revision` into
-`--expect-revision`. "Someone changed it between my read and my write" then surfaces as exit
-code 5 instead of silently overwriting the user's edit.
+When writing several times to the same project, carry the previous response's `revision`
+into `expectRevision`. "Someone changed it between my read and my write" then surfaces as
+`E_CONFLICT_REVISION` instead of silently overwriting the user's edit.
 
-## 4. Intent → commands
+## 4. Intent → tool
 
-| The user says | Command chain | Notes |
+Tool names are the operation ids with `.` replaced by `_`; some clients prefix them with the
+server name (`mcp__splitjam__track_gain`). Arguments are shown as JSON.
+
+| The user says | Call | Notes |
 | --- | --- | --- |
-| "set the BPM to 92" | `beat get` → if `mode=automatic`: `beat mode --mode tap` → `beat bpm 92` → `beat get` | Changing BPM in automatic mode is refused (exit 2) |
-| "put the downbeat at 0.35s" | `beat get` → `beat anchor set --at 0.35` | Automatic mode snaps to the nearest beat and fails with `E_ANCHOR_FAR` if it is too far; tap mode places it freely and rebuilds downbeats |
-| "3 beats per bar" | `beat meter --beats-per-bar 3` | 2...16 |
-| "hide the guitar" | `track fold stem:guitar` | **Hides the lane, does not mute.** Undo with `track unfold` |
-| "mute the bass" / "unmute" | `track mute stem:bass` / `track mute stem:bass --unmute` | |
-| "drums only" | `track solo stem:drums`; for "drums and bass", solo one and `track mute` the rest | Solo takes a single track — do not pretend otherwise |
-| "pan the lead guitar 30% left" | `track pan "Lead Guitar" --value -0.3` | Persisted; survives reopening the project |
-| "set the gain to 1.4" | `track gain <track> --value 1.4` | Free tier clamps to 1.0 and returns a `W_CLAMPED` warning |
-| "chorus from 1:12 to 1:36" | `section create --start 72 --end 96 --title Chorus` | Free tier allows 3 sections; the 4th is refused and raises the upgrade prompt |
-| "slow the whole song to 0.8" | `mixer speed --value 0.8` | Free tier clamps into 0.75...1.0 |
-| "down two semitones" | `mixer pitch --semitones -2` | Free tier: ±3 semitones, 2 changes per 30 minutes |
-| "show me the drums waveform" | `track audio peaks stem:drums --buckets 800` | |
-| "export 12 to 24 seconds" | `track audio slice stem:drums --range 12-24 --out ~/Desktop/cut.wav` | The app renders the WAV; the CLI downloads it and writes `--out` (defaults to the current directory). `savedTo` in the result tells you where it landed. |
-| "what are the chords" / "write Am on bar 2" | `chord get` / `chord note set --bar 2 --text Am` | The note is anchored to the **bar start in seconds**, not the bar number |
-| "give me the lyrics" | `lyrics get --format lrc` | Read-only; `json` / `lrc` / `plain` |
-| "which file is this track" | `track audio file <track> --channel original` | |
-| "can I use high-precision separation" | `entitlement get` → `stem_split_pro.allowed` | If not, say it is Pro-only and name the free tiers |
-| "how many separations left" | `entitlement get` → `weekly_separation_limit` | Report remaining + resets_at |
+| "set the BPM to 92" | `beat_get` → if `mode=automatic`: `beat_mode {mode:"tap"}` → `beat_bpm {bpm:92}` → `beat_get` | changing BPM in automatic mode is refused (`E_MODE`) |
+| "put the downbeat at 0.35s" | `beat_get` → `beat_anchor {at:"0.35"}` | automatic mode snaps to the nearest beat and fails with `E_ANCHOR_FAR` if it is too far; tap mode places it freely and rebuilds downbeats |
+| "3 beats per bar" | `beat_meter {beatsPerBar:3}` | 2…16 |
+| "hide the guitar" | `track_fold {track:"stem:guitar"}` | **hides the lane, does not mute**; undo with `folded:false` |
+| "mute the bass" / "unmute" | `track_mute {track:"stem:bass"}` / `{muted:false}` | |
+| "drums only" | `track_solo {track:"stem:drums"}`; for "drums and bass", solo one and mute the rest | solo takes a single track — do not pretend otherwise |
+| "pan the lead guitar 30% left" | `track_pan {track:"Lead Guitar", value:-0.3}` | persisted; survives reopening |
+| "set the gain to 1.4" | `track_gain {track:"<track>", value:1.4}` | free tier clamps to 1.0 and returns a `W_CLAMPED` warning |
+| "chorus from 1:12 to 1:36" | `section_create {start:72, end:96, title:"Chorus"}` | free tier allows 3 sections; the 4th is refused and raises the upgrade prompt |
+| "slow the whole song to 0.8" | `mixer_speed {value:0.8}` | free tier clamps into 0.75…1.0 |
+| "down two semitones" | `mixer_pitch {semitones:-2}` | free: ±3 semitones, 2 changes per 30 minutes |
+| "show me the drums waveform" | `track_audio_peaks {track:"stem:drums", buckets:800}` | |
+| "export 12 to 24 seconds" | `track_audio_slice {track:"stem:drums", range:"12-24"}` | the app renders the WAV and returns it **as an audio content block** in the same result (≤8 MB; below that, one result carries both the envelope and the bytes) |
+| "what are the chords" / "write Am on bar 2" | `chord_get` / `chord_note_set {bar:2, text:"Am"}` | the note is anchored to the **bar start in seconds**, not the bar number |
+| "give me the lyrics" | `lyrics_get {format:"lrc"}` | read-only; `json` / `lrc` / `plain` |
+| "which file is this track" | `track_audio_file {track:"<track>"}` | |
+| "can I use high-precision separation" | `entitlement_get` → `stem_split_pro.allowed` | if not, say it is Pro-only and name the free tiers |
+| "how many separations left" | `entitlement_get` → `weekly_separation_limit` | report remaining + `resets_at` |
+| "what can you do" | `capabilities` | op list with `requires`, `constraint`, `permission`, `allowed` — cheaper and more accurate than guessing |
 
 ### Project and track references
 
-**Project**: full UUID → UUID prefix → exact name → substring, in that order. Omit it when
-only one project exists. Ambiguity lists candidates (exit 2) instead of picking one — writing
-to the wrong project costs more than one extra command.
+**Project**: full UUID → UUID prefix → exact name → unique substring. Omit it when only one
+project exists. Ambiguity returns candidates (`E_INVALID_ARG` with a hint) instead of picking
+one — writing to the wrong project costs more than one extra call.
 
-**Track**: `stem:drums` or the track name, case-insensitive and tolerant of spaces, hyphens and
-underscores (`lead-guitar`, `LeadGuitar`, `stem:Lead Guitar` are the same track). Only the
-fixed `Stem` names resolve — `stem:guit` is not a prefix match, it returns the list of valid
-names. The recording track is read-only.
+**Track**: `stem:drums` or the track name, case-insensitive and tolerant of spaces, hyphens
+and underscores (`lead-guitar`, `LeadGuitar`, `stem:Lead Guitar` all resolve the same way).
+Only the fixed `Stem` names resolve; `stem:guit` is not a prefix match and returns the list
+of valid names. The recording track is read-only.
 
 ## 5. What to say when blocked
 
+Every tool returns the same envelope — `{ ok, requestId, result, error, warnings, revision,
+schemaVersion }` — and a business failure arrives with `isError: true` (not as a JSON-RPC
+error, so the code is always visible). Branch on `error.code`:
+
 | Situation | What to say |
 | --- | --- |
-| `E_APP_NOT_RUNNING` | "SplitJam is **not running** (nothing is listening on 127.0.0.1), so I cannot operate it. Open the app (leave the window) and I will retry — nothing was modified." **Never say "I will open it for you"** |
-| `E_APP_NOT_READY` | "Something is listening on the automation port but it is not SplitJam — usually a stale process or a port clash. Quit it, then retry." |
-| `E_AUTH` / missing token | "The token the CLI holds was not accepted — either it is stale (the app regenerates it when you toggle Command Line Access) or the CLI reached a different SplitJam instance. Open **Settings → Command Line Access**, copy the token, run `splitjam auth --token <token>`, then `splitjam doctor --json` to see which port/instance it picked." |
-| `E_SCHEMA` | "The app and this CLI speak different automation versions (doctor lists which port speaks which). Update whichever is older — the app, or reinstall the CLI — then retry. Nothing was modified." |
-| `E_FORBIDDEN` (exit 10) | "SplitJam's CLI permission is too narrow for this command — read-only blocks every write, and deleting needs **Edit + delete**. Ask the user to raise Permission in **Settings → Command Line Access** and retry. This is not a paywall: do not suggest upgrading, and nothing was modified." |
+| nothing answers / connection refused | "SplitJam is **not running** (nothing is listening on 127.0.0.1:48321), so I cannot operate it. Open the app, turn on **Settings → MCP Server**, and I will retry — nothing was modified." **Never say "I will open it for you"** |
+| `401` on the handshake | "The MCP server rejected the token. Copy the current token from **Settings → MCP Server** into the client config (regenerating it invalidates the old one), then retry. Nothing was modified." |
+| `E_SCHEMA` | "This client and the app speak different automation schemas. Update whichever is older, then retry. Nothing was modified." |
+| `E_FORBIDDEN` | "SplitJam's permission is too narrow for this call — **Read only** blocks every write, and deleting needs **Edit + delete**. Ask the user to raise Permission in **Settings → MCP Server**. This is not a paywall: do not suggest upgrading, and nothing was modified." |
 | `E_PRO_REQUIRED` + `reason=entitlement` | "This (high-precision separation / multi-stem export / a 4th section) is a Pro feature and this account has no Pro entitlement. The app has already shown its upgrade prompt. **Do not quote prices, do not push, do not buy for them.**" |
 | `E_PRO_REQUIRED` + `reason=quota` | "The free quota is used up (3 separations per 7 days / 3 sections / 3 slices per hour). Next available at X, or Pro lifts the limit." |
-| `E_ENTITLEMENT_UNKNOWN` | "**The purchase state for this account could not be read** (offline or the store service is unavailable), so this cannot run. **That does not mean you have to pay.** Retry after `entitlement refresh`." |
-| `E_CONFLICT_REVISION` | Report the current revision, re-read with `project get`, then write again. Do not blindly replay the same request. |
-
-**On `E_PRO_REQUIRED`, stop. Do not retry the same operation.** Never try to get around it by
-changing parameters — dropping to a lower tier, or splitting one multi-stem export into ten
-single-stem exports. That is circumventing the paywall, not finishing the task.
+| `E_ENTITLEMENT_UNKNOWN` | "**The purchase state for this account could not be read** (offline or the store service unavailable), so this cannot run. **That does not mean you have to pay.** Retry after `entitlement_refresh`." |
+| `E_CONFLICT_REVISION` | Report the current revision, re-read with `project_get`, then write again. Do not blindly replay the same call. |
+| `E_APP_NOT_FOREGROUND` | Only `entitlement_restore` needs the app in front. Ask the user to bring it forward, then retry. |
+| `E_BUSY` / `E_CANCELLED` / `E_MODEL_MISSING` / `E_NO_BEAT_GRID` | Translate honestly and name the in-app action that fixes it. |
 
 ## 6. How to report back
 
@@ -161,34 +193,38 @@ Four lines are enough:
 done       set "Lead Guitar" pan to -0.3 (30% left)
 project    Midnight Drive (a1b2c3d4)
 state      revision 7f3a91c2 · written to disk, still there after reopening
-undo       splitjam track pan "Lead Guitar" --value 0
+undo       track_pan { track: "Lead Guitar", value: 0 }
 ```
 
-Do not paste large JSON blobs at the user. `--json` is for programs; the human gets the four
-lines above.
+Undo is the inverse call, quoted so the user can run it themselves. Do not paste large JSON
+blobs at the user — the envelope is for you, the four lines are for them. If a warning came
+back (`W_CLAMPED`), the report must carry both numbers: "you asked for 1.4, the free tier
+caps at 1.0, 1.0 was written".
 
 ## 7. Not supported in this version
 
-These exist in the design but are **not implemented**. Say so instead of improvising:
+These exist in the catalog as `implemented: false`, so they are **not exposed as tools**.
+Say so instead of improvising:
 
-- separation and import (`import`, `job`) — do it in the app
-- lyrics search, import, offset (`lyrics` is read-only here)
-- chord recognition (`chord recognize`) — only the in-app button triggers it
-- user tracks, nested tracks, asset replacement
-- stem export, audio-to-MIDI, staff/tab scores (`bundle` / `transcribe` / `score`)
+- separation and import — do it in the app
+- lyrics search, import, offset (`lyrics_get` is read-only)
+- chord recognition — only the in-app button triggers it
+- user track creation, nested tracks, asset replacement
+- stem/mix export, audio-to-MIDI, staff/tab scores
 - playback transport (play / pause / seek) and recording capture
+- beat re-analysis — the in-app analysis button only
 
-The authority is always `splitjam capabilities --json`: entries with `implemented: false` are
-refused before execution with `E_UNSUPPORTED`.
+`capabilities` is the authority: anything not in `tools/list` cannot be called.
 
 ## 8. References
 
-- `references/commands.md` — full command table with parameter types (generated)
-- `references/contracts.md` — request/response envelopes, error codes, exit codes, `W_CLAMPED`
+- `references/tools.md` — all 54 tools grouped by category, with parameters
+- `references/contracts.md` — transport, auth, permission tiers, envelopes, error codes, warnings, revisions
 - `references/tracks.md` — reference resolution, gain clamping, fold vs mute
-- `references/beats.md` — the four beat layers (source / applied / render / metronome)
-- `references/lyrics.md` — the three `lyrics get` formats and LRC fields
+- `references/beats.md` — the four beat layers and the three traps
+- `references/lyrics.md` — the three `lyrics_get` formats
 - `references/recipes.md` — copy-paste playbooks (retime a song, cut sections, start from scratch)
 - `scripts/doctor.sh` — one-shot health check translated into plain language
 - `scripts/snapshot.sh` — save a JSON snapshot of a project before changing it
-- `scripts/gen-commands.sh` — regenerate `references/commands.md` from the CLI's own table
+- `scripts/gen-tools.sh` — regenerate `references/tools.md` from a running app
+- `scripts/mcp.py` — the caller behind those three; `health` / `tools` / `call` / `snapshot`

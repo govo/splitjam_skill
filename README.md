@@ -4,16 +4,36 @@ Agent skill for **SplitJam** (StemsPlayer) on macOS. This repo **is** the skill 
 `references/` and `scripts/` live at the root, so it can be symlinked or copied straight into
 `~/.workbuddy/skills/splitjam`.
 
-The skill drives the running app through the `splitjam` CLI: read projects, set
+The skill drives the running app over its **local MCP server**: read projects, set
 gain/pan/mute/solo/fold, retune the beat grid, run the metronome, manage practice sections,
 edit chords and bar notes, read lyrics, export waveform peaks and WAV slices.
 
-Two companions:
+There is nothing else to install. The app hosts the server itself
+(`http://127.0.0.1:48321/mcp`, 54 tools, Streamable HTTP), so the only setup is registering
+that endpoint in whatever MCP client the agent runs in.
 
-- CLI binaries: [`govo/splitjam_cli`](https://github.com/govo/splitjam_cli) — `brew install govo/tap/splitjam`
-- Homebrew tap: [`govo/homebrew-tap`](https://github.com/govo/homebrew-tap)
+## Setup
 
-## Install
+1. In SplitJam: **Settings → MCP Server** → switch it on.
+2. Copy the endpoint and the token from the same card.
+3. Add them to the agent's MCP config:
+
+```json
+{
+  "mcpServers": {
+    "splitjam": {
+      "type": "http",
+      "url": "http://127.0.0.1:48321/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+If the connection does not work, run `SPLITJAM_TOKEN=<token> ./scripts/doctor.sh` — it names
+the cause (app closed, server off, stale token, read-only tier) and the fix.
+
+## Install the skill
 
 The repo root is the skill, so point the skill directory straight at this checkout.
 
@@ -37,44 +57,41 @@ Either way the skill shows up as `splitjam` in the skill settings.
 splitjam_skill/                 # the repo root is the skill
 ├── SKILL.md                    # the part read every session (hard rules, intents, reporting)
 ├── references/
-│   ├── commands.md             # full command table — generated from `splitjam docs`, do not edit
-│   ├── contracts.md            # envelopes, error codes, exit codes, W_CLAMPED
+│   ├── tools.md                # all 54 tools with parameters — mirrors tools/list
+│   ├── contracts.md            # transport, auth, permission tiers, envelopes, error codes
 │   ├── tracks.md               # reference resolution, clamping, fold vs mute
 │   ├── beats.md                # the four beat layers
 │   ├── lyrics.md               # the three lyrics formats (read-only)
 │   └── recipes.md              # copy-paste playbooks
 └── scripts/
+    ├── mcp.py                  # handshake + tools/call, no dependencies beyond python3
     ├── doctor.sh               # health check rendered as plain language
     ├── snapshot.sh             # JSON snapshot of a project before changing it
-    └── gen-commands.sh         # regenerate references/commands.md
+    └── gen-tools.sh            # regenerate references/tools.md from a running app
 ```
 
 ## Maintenance
 
-**Do not hand-write the command table.** It is generated from the CLI's own registry:
+**Do not hand-write the tool table.** It is derived from the app's single catalog, and the
+same table is what `tools/list` returns:
 
 ```bash
-./scripts/gen-commands.sh
-# without splitjam installed:
-SPLITJAM_BIN=../demucs/cli/.build/debug/splitjam ./scripts/gen-commands.sh
+SPLITJAM_TOKEN=<token> ./scripts/gen-tools.sh
 ```
-
-The data source is `splitjam docs --json`, so the reference cannot drift from the binary.
 
 When editing `SKILL.md`, keep two rules:
 
 1. Only what must be remembered goes in `SKILL.md`; details go to `references/`.
-2. Every command named there must actually exist. This CLI has no `beat analyze`, no `import`,
-   no `lyrics offset` and no `score` commands — do not write "just run `splitjam beat analyze`",
-   because an agent will call it and burn turns on `unknown command`.
+2. Every tool named there must actually exist. The catalog has no `beat_analyze`, no import,
+   no `lyrics_offset` and no score tools — do not write "just call `beat_analyze`", because an
+   agent will call it and burn turns on `E_UNSUPPORTED`.
 
 ## Version
 
-`SKILL.md`'s `metadata.version` tracks the CLI release (`requires:` states the floor). Current:
-CLI 0.3.0, schema 2.
+`SKILL.md`'s `metadata.version` tracks the app's automation contract. Current: schema 3,
+MCP protocol 2025-06-18, 54 tools, permission tiers `read` / `edit` / `own`.
 
-The floor matters: `doctor.sh` reads the port-discovery fields of `doctor --json` (`endpoint`,
-`ports.splitjamInstances`, `presence: incompatible`) that only exist from 0.2.0 onward, and 0.3.0
-is where the app reports a **permission tier** (`read` / `edit` / `own`) and refuses writes with
-`E_FORBIDDEN` (exit 10). Against an older binary the agent would be told it can work while every
-write fails.
+The floor matters. `scripts/doctor.sh` reads `/health` fields (`protocolVersion`,
+`schemaVersion`, `permission`, `toolCount`) that only exist on the MCP build, and the whole
+skill assumes business errors arrive as `isError: true` tool results rather than process exit
+codes. Against the older HTTP-service build every call here fails.
