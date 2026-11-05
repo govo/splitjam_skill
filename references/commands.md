@@ -1,11 +1,11 @@
 # Command reference
 
-Generated from `splitjam docs --json` (CLI 0.1.0). **Do not edit by hand** —
+Generated from `splitjam docs --json` (CLI 0.3.0). **Do not edit by hand** —
 run `scripts/gen-commands.sh` after changing the CLI command table.
 
 Every command also accepts the global flags: `--json`, `--project`, `--expect-revision`,
-`--dry-run`, `--yes`, `--strict`, `--no-app-prompt`, `--timeout`, `--wait-startup`,
-`--bridge-dir`. Flags may appear before or after the command.
+`--dry-run`, `--yes`, `--strict`, `--no-app-prompt`, `--timeout`, `--port`, `--token`.
+Flags may appear before or after the command.
 
 ## Diagnostics
 
@@ -112,10 +112,10 @@ Every command also accepts the global flags: `--json`, `--project`, `--expect-re
 | --- | --- | --- |
 | `splitjam lyrics get --format lrc` | Lyrics as json, lrc or plain. | `project` (string)<br>`--format` (string) |
 
-## Local commands (no bridge)
+## Local commands (never talk to the app)
 
 | Command | Description |
 | --- | --- |
-| `splitjam doctor` | Presence, bridge path, token state and entitlement. Exits 3 when the app is closed but still prints everything. |
+| `splitjam doctor` | Presence, endpoint, every SplitJam instance on 48321–48330, token state and entitlement. Exits 3 when the app is closed but still prints everything. |
 | `splitjam docs [--json]` | This table, as text or JSON. |
 | `splitjam --version` | CLI version only. |

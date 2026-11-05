@@ -84,8 +84,8 @@ lines = [
     "run `scripts/gen-commands.sh` after changing the CLI command table.",
     "",
     "Every command also accepts the global flags: `--json`, `--project`, `--expect-revision`,",
-    "`--dry-run`, `--yes`, `--strict`, `--no-app-prompt`, `--timeout`, `--wait-startup`,",
-    "`--bridge-dir`. Flags may appear before or after the command.",
+    "`--dry-run`, `--yes`, `--strict`, `--no-app-prompt`, `--timeout`, `--port`, `--token`.",
+    "Flags may appear before or after the command.",
     "",
 ]
 
@@ -108,11 +108,11 @@ for name in ordered:
     lines.append("")
 
 lines.extend([
-    "## Local commands (no bridge)",
+    "## Local commands (never talk to the app)",
     "",
     "| Command | Description |",
     "| --- | --- |",
-    "| `splitjam doctor` | Presence, bridge path, token state and entitlement. Exits 3 when the app is closed but still prints everything. |",
+    "| `splitjam doctor` | Presence, endpoint, every SplitJam instance on 48321–48330, token state and entitlement. Exits 3 when the app is closed but still prints everything. |",
     "| `splitjam docs [--json]` | This table, as text or JSON. |",
     "| `splitjam --version` | CLI version only. |",
     "",

@@ -71,7 +71,10 @@ When editing `SKILL.md`, keep two rules:
 ## Version
 
 `SKILL.md`'s `metadata.version` tracks the CLI release (`requires:` states the floor). Current:
-CLI 0.1.0, protocol 1.
+CLI 0.3.0, schema 2.
 
-The floor matters: `track audio slice` and `lyrics get` only exist from 0.1.0 onward, so an older
-CLI would make the agent believe it can export audio and then fail with `unknown command`.
+The floor matters: `doctor.sh` reads the port-discovery fields of `doctor --json` (`endpoint`,
+`ports.splitjamInstances`, `presence: incompatible`) that only exist from 0.2.0 onward, and 0.3.0
+is where the app reports a **permission tier** (`read` / `edit` / `own`) and refuses writes with
+`E_FORBIDDEN` (exit 10). Against an older binary the agent would be told it can work while every
+write fails.

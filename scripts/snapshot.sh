@@ -8,7 +8,7 @@
 #
 # Usage
 #   ./snapshot.sh [project] [outdir] [extra global flags...]
-#   ./snapshot.sh "" /tmp/snap --bridge-dir /tmp/splitjam-bridge-test
+#   ./snapshot.sh "" /tmp/snap --port 48322
 #
 # Deliberately avoids `arr=()` + `"${arr[@]}"`: bash 3.2 expands an empty array into one
 # empty argument, which turns into `splitjam --json "" ...` and fails with "Missing command".
