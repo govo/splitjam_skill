@@ -1,6 +1,6 @@
 ---
 name: splitjam
-description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server — read projects, set per-track gain/pan/mute/solo/fold, retune the beat grid (mode, BPM, meter, multiplier, anchor, beat lines, accent, snap), control the metronome, manage practice sections, edit chord display and per-bar notes, read lyrics, and export waveform peaks or WAV slices. Use when the user asks to "set the BPM to 92", "put the downbeat at 0.35s", "mute the bass", "solo the drums", "pan the lead guitar left", "hide the guitar lane", "set the gain to 1.4", "make a chorus section from 1:12 to 1:36", "slow the whole song down", "shift the pitch down two semitones", "show me the drums waveform", "export 12 to 24 seconds", or "read the lyrics" in SplitJam. Requires SplitJam running with Settings → MCP Server on, and that server (http://127.0.0.1:48321/mcp) registered in the agent's MCP config with its bearer token. This skill never launches the app and never polls.
+description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server — read projects, set per-track gain/pan/mute/solo/fold, retune the beat grid (mode, BPM, meter, multiplier, anchor, beat lines, accent, snap), control the metronome, manage practice sections, edit chord display and per-bar notes, read lyrics, and export waveform peaks or WAV slices. Use when the user asks to "set the BPM to 92", "put the downbeat at 0.35s", "mute the bass", "solo the drums", "pan the lead guitar left", "hide the guitar lane", "set the gain to 1.4", "make a chorus section from 1:12 to 1:36", "slow the whole song down", "shift the pitch down two semitones", "show me the drums waveform", "export 12 to 24 seconds", or "read the lyrics" in SplitJam. Requires SplitJam running with Settings → MCP Server on; this skill connects through its own scripts/mcp.py using the token from Settings, so no client MCP config is needed. This skill never launches the app and never polls.
 metadata:
   version: "1.0.0"
   requires: SplitJam with the MCP server (schema 3, 54 tools)
@@ -24,11 +24,10 @@ not a flaky failure, it is a missing precondition.
 1. **Check the link before working.** One `ping` (or `project_list`) is enough. It proves the
    server answers, the token is accepted, and — with `project_list` — that the project you are
    about to touch actually exists.
-2. **If the tools are missing or the call cannot connect, stop.** Two cases, two answers:
-   - the tool list has no `project_list` / `track_gain` → this server is not registered in
-     your MCP client;
-   - the call fails at the transport level (connection refused, 401) → the app is closed,
-     the server is off, or the token is stale.
+2. **If the call cannot connect, stop.** Two cases, two answers:
+   - `mcp.py` cannot reach the endpoint (connection refused) → the app is closed, or the
+     server switch is off;
+   - the handshake returns 401 → the token is stale or missing.
 
    Both are fixed in the app (**Settings → MCP Server**), by the user. Do **not** launch the
    app, do **not** poll, do **not** read the app's container instead. Say that nothing was
@@ -50,50 +49,50 @@ not a flaky failure, it is a missing precondition.
 
 ## 1. Connecting (and diagnosing a broken connection)
 
-Registration needs exactly two values, both in **SplitJam → Settings → MCP Server**:
+The app hosts the server; **this skill talks to it**. `scripts/mcp.py` is a ~500-line
+stdlib-only client that does the handshake, keeps the session, and calls tools. Nothing goes
+into a client config, no JSON to edit, no app restart.
+
+Two values come from **SplitJam → Settings → MCP Server**:
 
 | Value | Where | Shape |
 | --- | --- | --- |
-| endpoint | the status row, and **Copy** | `http://127.0.0.1:48321/mcp` |
-| token | the token row, **Copy** | 64 hex chars; sent as `Authorization: Bearer <token>` |
+| endpoint | status row, **Copy** | `http://127.0.0.1:48321/mcp` |
+| token | token row, **Copy** | 64 hex chars; sent as `Authorization: Bearer <token>` |
 
-A client config entry looks like this (Claude Code / Cursor style; other clients differ in
-syntax only):
-
-```json
-{
-  "mcpServers": {
-    "splitjam": {
-      "type": "http",
-      "url": "http://127.0.0.1:48321/mcp",
-      "headers": { "Authorization": "Bearer <token>" }
-    }
-  }
-}
-```
-
-When a client will not connect, one script answers "which part is broken" without any
-guesswork:
+Store the token once — `mcp.py` looks in three places, first hit wins:
 
 ```bash
-SPLITJAM_TOKEN=<token> ./scripts/doctor.sh
+--token <token>              # one call only
+$SPLITJAM_TOKEN              # this shell
+~/.config/splitjam/token     # persistent, 0600 — use this by default
 ```
 
-It prints presence, app version, protocol, permission tier, tool count, and one verdict
-with the fix. `scripts/mcp.py` is the same caller underneath — `health`, `tools`, `call`,
-`snapshot`. Use it for diagnosis only; a working MCP client does not need it.
+```bash
+mkdir -p ~/.config/splitjam
+printf %s '<token>' > ~/.config/splitjam/token && chmod 600 ~/.config/splitjam/token
+
+./scripts/mcp.py doctor          # presence, app, protocol, permission, tools, one verdict
+./scripts/mcp.py call project_list
+```
+
+`doctor` answers "which part is broken" without guesswork; `health`, `tools`, `call` and
+`snapshot` are the other subcommands. If the user's client speaks MCP natively and they would
+rather see typed tools in the sidebar, registering the same URL plus an
+`Authorization: Bearer <token>` header also works — but it is optional, and this skill never
+depends on it.
 
 Common causes, in the order they actually happen:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | connection refused | app closed, or the server is off | open the app, keep it running, turn the switch on |
-| 401 on every call | token stale (regenerated, or server toggled) | copy the current token into the client config |
+| 401 on every call | token stale (regenerated, or server toggled) | copy the current token again |
 | server fails to start, card says the port is taken | a second SplitJam instance, or another process, holds 48321 | quit whatever holds the port, then toggle **MCP Server** off and on — the port is fixed, there is no port setting to change |
 | tools listed but every write returns `E_FORBIDDEN` | permission tier is **Read only** | raise it in the card |
 
-The port does **not** roll forward. The URL is written into client configs, so 48321 is the
-only port; if it is taken the app reports the failure instead of silently moving.
+The port does **not** roll forward. 48321 is the only port; if it is taken the app reports the
+failure instead of silently moving.
 
 ## 2. Arguments every tool shares
 
@@ -175,7 +174,7 @@ error, so the code is always visible). Branch on `error.code`:
 | Situation | What to say |
 | --- | --- |
 | nothing answers / connection refused | "SplitJam is **not running** (nothing is listening on 127.0.0.1:48321), so I cannot operate it. Open the app, turn on **Settings → MCP Server**, and I will retry — nothing was modified." **Never say "I will open it for you"** |
-| `401` on the handshake | "The MCP server rejected the token. Copy the current token from **Settings → MCP Server** into the client config (regenerating it invalidates the old one), then retry. Nothing was modified." |
+| `401` on the handshake | "The MCP server rejected the token. Copy the current token from **Settings → MCP Server** again (regenerating it invalidates the old one), update `~/.config/splitjam/token`, then retry. Nothing was modified." |
 | `E_SCHEMA` | "This client and the app speak different automation schemas. Update whichever is older, then retry. Nothing was modified." |
 | `E_FORBIDDEN` | "SplitJam's permission is too narrow for this call — **Read only** blocks every write, and deleting needs **Edit + delete**. Ask the user to raise Permission in **Settings → MCP Server**. This is not a paywall: do not suggest upgrading, and nothing was modified." |
 | `E_PRO_REQUIRED` + `reason=entitlement` | "This (high-precision separation / multi-stem export / a 4th section) is a Pro feature and this account has no Pro entitlement. The app has already shown its upgrade prompt. **Do not quote prices, do not push, do not buy for them.**" |

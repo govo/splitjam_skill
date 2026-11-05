@@ -9,29 +9,24 @@ gain/pan/mute/solo/fold, retune the beat grid, run the metronome, manage practic
 edit chords and bar notes, read lyrics, export waveform peaks and WAV slices.
 
 There is nothing else to install. The app hosts the server itself
-(`http://127.0.0.1:48321/mcp`, 54 tools, Streamable HTTP), so the only setup is registering
-that endpoint in whatever MCP client the agent runs in.
+(`http://127.0.0.1:48321/mcp`, 54 tools, Streamable HTTP) and the skill talks to it through
+`scripts/mcp.py` — **no MCP client config to write, nothing to restart**. Registering the same
+URL in a client that speaks MCP natively still works, but it is optional.
 
 ## Setup
 
 1. In SplitJam: **Settings → MCP Server** → switch it on.
-2. Copy the endpoint and the token from the same card.
-3. Add them to the agent's MCP config:
+2. Copy the token from the same card.
+3. Store it where `scripts/mcp.py` looks (`--token`, then `$SPLITJAM_TOKEN`, then this file):
 
-```json
-{
-  "mcpServers": {
-    "splitjam": {
-      "type": "http",
-      "url": "http://127.0.0.1:48321/mcp",
-      "headers": { "Authorization": "Bearer <token>" }
-    }
-  }
-}
+```bash
+mkdir -p ~/.config/splitjam
+printf %s '<token>' > ~/.config/splitjam/token && chmod 600 ~/.config/splitjam/token
+./scripts/mcp.py doctor
 ```
 
-If the connection does not work, run `SPLITJAM_TOKEN=<token> ./scripts/doctor.sh` — it names
-the cause (app closed, server off, stale token, read-only tier) and the fix.
+`doctor` names the cause when something is off (app closed, server off, stale token, read-only
+tier) and the fix. A healthy one ends with `ok ready to work.`
 
 ## Install the skill
 
@@ -76,7 +71,7 @@ splitjam_skill/                 # the repo root is the skill
 same table is what `tools/list` returns:
 
 ```bash
-SPLITJAM_TOKEN=<token> ./scripts/gen-tools.sh
+./scripts/gen-tools.sh   # token from ~/.config/splitjam/token
 ```
 
 When editing `SKILL.md`, keep two rules:
