@@ -6,10 +6,11 @@ Agent skill for **SplitJam** (StemsPlayer) on macOS. This repo **is** the skill 
 
 The skill drives the running app over its **local MCP server**: read projects, set
 gain/pan/mute/solo/fold, retune the beat grid, run the metronome, manage practice sections,
-edit chords and bar notes, read lyrics, export waveform peaks and WAV slices.
+edit chords and bar notes, search/read/import lyrics and shift their global offset, export
+waveform peaks and WAV slices.
 
 There is nothing else to install. The app hosts the server itself
-(`http://127.0.0.1:48321/mcp`, 54 tools, Streamable HTTP) and the skill talks to it through
+(`http://127.0.0.1:48321/mcp`, 57 tools, Streamable HTTP) and the skill talks to it through
 `scripts/mcp.py` — **no MCP client config to write, nothing to restart**. Registering the same
 URL in a client that speaks MCP natively still works, but it is optional.
 
@@ -52,11 +53,11 @@ Either way the skill shows up as `splitjam` in the skill settings.
 splitjam_skill/                 # the repo root is the skill
 ├── SKILL.md                    # the part read every session (hard rules, intents, reporting)
 ├── references/
-│   ├── tools.md                # all 54 tools with parameters — mirrors tools/list
+│   ├── tools.md                # all 57 tools with parameters — mirrors tools/list
 │   ├── contracts.md            # transport, auth, permission tiers, envelopes, error codes
 │   ├── tracks.md               # reference resolution, clamping, fold vs mute
 │   ├── beats.md                # the four beat layers
-│   ├── lyrics.md               # the three lyrics formats (read-only)
+│   ├── lyrics.md               # all four lyrics tools (search / get / import / offset)
 │   └── recipes.md              # copy-paste playbooks
 └── scripts/
     ├── mcp.py                  # handshake + tools/call, no dependencies beyond python3
@@ -77,14 +78,15 @@ same table is what `tools/list` returns:
 When editing `SKILL.md`, keep two rules:
 
 1. Only what must be remembered goes in `SKILL.md`; details go to `references/`.
-2. Every tool named there must actually exist. The catalog has no `beat_analyze`, no import,
-   no `lyrics_offset` and no score tools — do not write "just call `beat_analyze`", because an
-   agent will call it and burn turns on `E_UNSUPPORTED`.
+2. Every tool named there must actually exist. The catalog now has `lyrics_search`,
+   `lyrics_import` and `lyrics_offset`, but still no `beat_analyze`, no separation / audio
+   import and no score tools — do not write "just call `beat_analyze`", because an agent will call it
+   and burn turns on `E_UNSUPPORTED`.
 
 ## Version
 
 `SKILL.md`'s `metadata.version` tracks the app's automation contract. Current: schema 3,
-MCP protocol 2025-06-18, 54 tools, permission tiers `read` / `edit` / `own`.
+MCP protocol 2025-06-18, 57 tools, permission tiers `read` / `edit` / `own`.
 
 The floor matters. `scripts/doctor.sh` reads `/health` fields (`protocolVersion`,
 `schemaVersion`, `permission`, `toolCount`) that only exist on the MCP build, and the whole

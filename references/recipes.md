@@ -101,3 +101,26 @@ project_get  { project: "<id>" }          # re-read and see what changed
 
 A conflict means someone changed the project after your read — usually the user, in the UI.
 Do **not** drop `expectRevision` and write anyway; that overwrites their edit.
+
+## G. Find and import lyrics (including word-level timing)
+
+```
+project_list    {}                                            # 1 find the project id
+lyrics_search   { project: "<id>", index: 0 }                 # 2 name becomes the query; index returns lyricsText
+lyrics_import   { project: "<id>", text: "<lyricsText>",
+                  dryRun: true }                              # 3 validate the parse, write nothing
+lyrics_import   { project: "<id>", text: "<lyricsText>" }     # 4 write, keep the returned revision
+lyrics_get      { project: "<id>", format: "json" }           # 5 read back lines, word timestamps, offsets
+lyrics_offset   { project: "<id>", delta: -0.3,
+                  expectRevision: "<rev>" }                   # 6 fine-tune against the recording
+```
+
+Notes:
+- `lyrics_search` is the only tool here that uses the network; `E_LYRICS_SOURCE` means the
+  upstream failed, not that the user must pay. Try another `source` or ask for the LRC text.
+- Enhanced word-level LRC (`[00:30.10]<00:30.10>往<00:30.40>日…`) parses into the same
+  `Lyrics` model as the in-app import sheet — no separate tool is needed for karaoke timing.
+- Import **replaces** existing lyrics and resets the global offset unless `keepOffset: true`
+  or an explicit `offset` is given. When overwriting, `dryRun` + `expectRevision` first.
+- A search result may be for a different recording than the one in the project; when timings
+  are globally off, adjust with `lyrics_offset { delta: … }`, not by rewriting every line.

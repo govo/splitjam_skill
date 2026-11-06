@@ -1,6 +1,6 @@
 # Tool reference
 
-All 54 tools the app exposes over MCP. Mirrors `tools/list` — run
+All 57 tools the app exposes over MCP. Mirrors `tools/list` — run
 `SPLITJAM_TOKEN=<token> ./scripts/gen-tools.sh` against a running app to regenerate and
 diff.
 
@@ -139,10 +139,18 @@ Preview with `dryRun: true` first.
 | Tool | What it does | Parameters |
 | --- | --- | --- |
 | `lyrics_get` | Lyrics as `json`, `lrc` or `plain`. Read-only. | `project?`<br>`format?` (`json` \| `lrc` \| `plain`) |
+| `lyrics_search` | Query online lyrics sources (Karalyr / LRCLIB / Lyrics.ovh). Read-only, but the only tool that uses the network. With `index`, also returns the full lyrics text ready for `lyrics_import`. | `project?` (only supplies the default query and duration)<br>`query?`<br>`track?`<br>`artist?`<br>`album?`<br>`source?` (`all` \| `karalyr` \| `lrclib` \| `lyricsOvh`)<br>`limit?` (1…50, default 10)<br>`index?` (int ≥ 0) |
+| `lyrics_import` | Parse and save LRC, word-by-word / enhanced LRC or plain lyrics text to a project. Replaces existing lyrics. | `project?`<br>`text` (string, required)<br>`title?`<br>`artist?`<br>`album?`<br>`offset?` (-60…60 s)<br>`keepOffset?` (bool, mutually exclusive with `offset`) |
+| `lyrics_offset` | Set, adjust or reset the global (user) offset. Exactly one of the three. | `project?`<br>`offset?` (-60…60 s)<br>`delta?` (-60…60 s)<br>`reset?` (bool) |
+
+`lyrics_search` needs no project reference; a project name is only a fallback query. The two
+writing tools support `dryRun` and `expectRevision` like every other write, and return the new
+`revision`. See `references/lyrics.md` for the full workflow and result shapes.
 
 ## Annotation hints
 
 `tools/list` also carries `annotations` per tool: `readOnlyHint` is true for everything with
 no side effects, `destructiveHint` for `section_delete` and `chord_note_delete`,
-`idempotentHint` mirrors `readOnlyHint`, `openWorldHint` is always false. Use them to decide
-whether a `dryRun` pass is worth a round trip — for read-only tools it never is.
+`idempotentHint` mirrors `readOnlyHint`, `openWorldHint` is true only for `lyrics_search`
+(the one tool that reaches a remote lyrics source). Use them to decide whether a `dryRun`
+pass is worth a round trip — for read-only tools it never is.

@@ -1,19 +1,20 @@
 ---
 name: splitjam
-description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server — read projects, set per-track gain/pan/mute/solo/fold, retune the beat grid (mode, BPM, meter, multiplier, anchor, beat lines, accent, snap), control the metronome, manage practice sections, edit chord display and per-bar notes, read lyrics, and export waveform peaks or WAV slices. Use when the user asks to "set the BPM to 92", "put the downbeat at 0.35s", "mute the bass", "solo the drums", "pan the lead guitar left", "hide the guitar lane", "set the gain to 1.4", "make a chorus section from 1:12 to 1:36", "slow the whole song down", "shift the pitch down two semitones", "show me the drums waveform", "export 12 to 24 seconds", or "read the lyrics" in SplitJam. Requires SplitJam running with Settings → MCP Server on; this skill connects through its own scripts/mcp.py using the token from Settings, so no client MCP config is needed. This skill never launches the app and never polls.
+description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server — read projects, set per-track gain/pan/mute/solo/fold, retune the beat grid (mode, BPM, meter, multiplier, anchor, beat lines, accent, snap), control the metronome, manage practice sections, edit chord display and per-bar notes, search/read/import lyrics, shift their global offset, and export waveform peaks or WAV slices. Use when the user asks to "set the BPM to 92", "put the downbeat at 0.35s", "mute the bass", "solo the drums", "pan the lead guitar left", "hide the guitar lane", "set the gain to 1.4", "make a chorus section from 1:12 to 1:36", "slow the whole song down", "shift the pitch down two semitones", "show me the drums waveform", "export 12 to 24 seconds", "read the lyrics", "find the lyrics for this song", "import these lyrics", or "shift the lyrics 0.3s" in SplitJam. Requires SplitJam running with Settings → MCP Server on; this skill connects through its own scripts/mcp.py using the token from Settings, so no client MCP config is needed. This skill never launches the app and never polls.
 metadata:
-  version: "1.0.0"
-  requires: SplitJam with the MCP server (schema 3, 54 tools)
+  version: "1.1.0"
+  requires: SplitJam with the MCP server (schema 3, 57 tools)
 ---
 
 # SplitJam over MCP
 
 The app hosts a **Model Context Protocol server** on `127.0.0.1:48321/mcp` (Streamable
-HTTP, JSON-RPC 2.0) and exposes **54 tools**. There is no CLI to install and no
+HTTP, JSON-RPC 2.0) and exposes **57 tools**. There is no CLI to install and no
 intermediate binary: an agent that has this server in its config calls the tools directly.
 
-Everything happens on this Mac. No network, no upload, no daemon, no TCC permission — the
-server only listens on loopback, and access is decided by one bearer token.
+Everything else happens on this Mac. No upload, no daemon, no TCC permission — the server
+only listens on loopback, and access is decided by one bearer token. One exception:
+`lyrics_search` queries public lyrics sources from the app; no project data leaves the Mac.
 
 **So the app must be running, with the server switched on.** When it is not, nothing
 answers and the request never happens — retrying a thousand times changes nothing. That is
@@ -149,6 +150,9 @@ server name (`mcp__splitjam__track_gain`). Arguments are shown as JSON.
 | "export 12 to 24 seconds" | `track_audio_slice {track:"stem:drums", range:"12-24"}` | the app renders the WAV and returns it **as an audio content block** in the same result (≤8 MB; below that, one result carries both the envelope and the bytes) |
 | "what are the chords" / "write Am on bar 2" | `chord_get` / `chord_note_set {bar:2, text:"Am"}` | the note is anchored to the **bar start in seconds**, not the bar number |
 | "give me the lyrics" | `lyrics_get {format:"lrc"}` | read-only; `json` / `lrc` / `plain` |
+| "find lyrics for this song" | `lyrics_search {query:"羽毛鳞刺", artist:"Dear Jane", index:0}` | read-only but uses the network; `index` also returns full text ready to import |
+| "import these lyrics" | `lyrics_import {project:"<id>", text:"<lrc>"}` | replaces existing lyrics; supports `dryRun` / `expectRevision` |
+| "shift the lyrics 0.3s later" | `lyrics_offset {delta:0.3}` | exactly one of `offset` (absolute), `delta`, `reset:true` |
 | "which file is this track" | `track_audio_file {track:"<track>"}` | |
 | "can I use high-precision separation" | `entitlement_get` → `stem_split_pro.allowed` | if not, say it is Pro-only and name the free tiers |
 | "how many separations left" | `entitlement_get` → `weekly_separation_limit` | report remaining + `resets_at` |
@@ -182,6 +186,7 @@ error, so the code is always visible). Branch on `error.code`:
 | `E_ENTITLEMENT_UNKNOWN` | "**The purchase state for this account could not be read** (offline or the store service unavailable), so this cannot run. **That does not mean you have to pay.** Retry after `entitlement_refresh`." |
 | `E_CONFLICT_REVISION` | Report the current revision, re-read with `project_get`, then write again. Do not blindly replay the same call. |
 | `E_APP_NOT_FOREGROUND` | Only `entitlement_restore` needs the app in front. Ask the user to bring it forward, then retry. |
+| `E_LYRICS_SOURCE` | The online lyrics source failed (`lyrics_search`). Say it is a network/source problem, not a paywall; check the connection, try another `source`, or import text directly. Nothing was written. |
 | `E_BUSY` / `E_CANCELLED` / `E_MODEL_MISSING` / `E_NO_BEAT_GRID` | Translate honestly and name the in-app action that fixes it. |
 
 ## 6. How to report back
@@ -205,8 +210,7 @@ caps at 1.0, 1.0 was written".
 These exist in the catalog as `implemented: false`, so they are **not exposed as tools**.
 Say so instead of improvising:
 
-- separation and import — do it in the app
-- lyrics search, import, offset (`lyrics_get` is read-only)
+- separation and audio import — do it in the app (lyrics import **is** supported: `lyrics_import`)
 - chord recognition — only the in-app button triggers it
 - user track creation, nested tracks, asset replacement
 - stem/mix export, audio-to-MIDI, staff/tab scores
@@ -217,11 +221,11 @@ Say so instead of improvising:
 
 ## 8. References
 
-- `references/tools.md` — all 54 tools grouped by category, with parameters
+- `references/tools.md` — all 57 tools grouped by category, with parameters
 - `references/contracts.md` — transport, auth, permission tiers, envelopes, error codes, warnings, revisions
 - `references/tracks.md` — reference resolution, gain clamping, fold vs mute
 - `references/beats.md` — the four beat layers and the three traps
-- `references/lyrics.md` — the three `lyrics_get` formats
+- `references/lyrics.md` — all four lyrics tools: search / get / import / offset, with parameter and result shapes
 - `references/recipes.md` — copy-paste playbooks (retime a song, cut sections, start from scratch)
 - `scripts/doctor.sh` — one-shot health check translated into plain language
 - `scripts/snapshot.sh` — save a JSON snapshot of a project before changing it

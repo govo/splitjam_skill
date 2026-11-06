@@ -18,7 +18,7 @@ DELETE /mcp     -> 204. Session teardown, courtesy only
   "ok": true, "pid": 4321, "instanceId": "<random per launch>",
   "protocolVersion": "2025-06-18", "schemaVersion": 3,
   "appVersion": "1.5", "buildVersion": "812", "startedAt": "2026-11-05T01:00:00Z",
-  "endpoint": "http://127.0.0.1:48321/mcp", "toolCount": 54,
+  "endpoint": "http://127.0.0.1:48321/mcp", "toolCount": 57,
   "permission": "edit", "permissionAllowsWrite": true, "permissionAllowsDelete": false,
   "automationEnabled": true
 }
@@ -63,9 +63,14 @@ One token, one permission tier, set by the user in **Settings → MCP Server**:
 
 | `permission` | UI label | Allowed | Refused |
 | --- | --- | --- | --- |
-| `read` | Read only | every `*_get` / `*_list` / `*_file` / `*_peaks` / `*_slice`, `ping`, `version`, `schema`, `capabilities`, `entitlement_*` | every mutating tool → `E_FORBIDDEN` |
+| `read` | Read only | every `*_get` / `*_list` / `*_file` / `*_peaks` / `*_slice`, `lyrics_search`, `ping`, `version`, `schema`, `capabilities`, `entitlement_*` | every mutating tool → `E_FORBIDDEN` |
 | `edit` (default) | Edit | the above + mixing, beats, sections, chords, lyrics, slicing | the two destructive tools (delete a section / a chord note) → `E_FORBIDDEN` |
 | `own` | Edit + delete | everything | — |
+
+`lyrics_search` is read-only but is the only tool that reaches the internet (public lyrics
+sources; only the query terms leave the Mac, never project data). `lyrics_import` and
+`lyrics_offset` write local project data and so need the `edit` tier; both take `dryRun` and
+`expectRevision` like any other write.
 
 `E_FORBIDDEN` is **not** `E_PRO_REQUIRED`: the fix is a settings change, not a purchase.
 Never answer it with an upgrade suggestion. `capabilities` returns `permission`, `mutates`,
@@ -189,7 +194,8 @@ Every mutating tool also saves an in-app snapshot first, and the result carries
 | `E_ENTITLEMENT_UNKNOWN` | purchase state unreadable. **Not the same as "must pay"** |
 | `E_FORBIDDEN` | permission tier too narrow — raise it in the app, do not suggest upgrading |
 | `E_APP_NOT_FOREGROUND` | needs the app in front (`entitlement_restore`) |
-| `E_BUSY` / `E_CANCELLED` / `E_SCHEMA` / `E_LYRICS_SOURCE` / `E_ENGINE_MISSING` / `E_BUNDLE_STALE` / `E_INTERNAL` | translate honestly; `E_INTERNAL` means the app log has the detail |
+| `E_LYRICS_SOURCE` | an online lyrics source failed (`lyrics_search`); check the network, try another `source`, or import text directly. This is a source failure, not a paywall and not a bad argument |
+| `E_BUSY` / `E_CANCELLED` / `E_SCHEMA` / `E_ENGINE_MISSING` / `E_BUNDLE_STALE` / `E_INTERNAL` | translate honestly; `E_INTERNAL` means the app log has the detail |
 
 `E_AUTH` and `E_APP_NOT_RUNNING` no longer reach the model: a stale token is a `401` at the
 transport, a closed app is a refused connection. Both are reported by the MCP client itself,
