@@ -1,8 +1,8 @@
 ---
 name: splitjam
-description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server — read projects, set per-track gain/pan/mute/solo/fold, retune the beat grid (mode, BPM, meter, multiplier, anchor, beat lines, accent, snap), control the metronome, manage practice sections, edit chord display and per-bar notes, search/read/import lyrics, shift their global offset, and export waveform peaks or WAV slices. Use when the user asks to "set the BPM to 92", "put the downbeat at 0.35s", "mute the bass", "solo the drums", "pan the lead guitar left", "hide the guitar lane", "set the gain to 1.4", "make a chorus section from 1:12 to 1:36", "slow the whole song down", "shift the pitch down two semitones", "show me the drums waveform", "export 12 to 24 seconds", "read the lyrics", "find the lyrics for this song", "import these lyrics", or "shift the lyrics 0.3s" in SplitJam. Requires SplitJam running with Settings → MCP Server on; this skill connects through its own scripts/mcp.py using the token from Settings, so no client MCP config is needed. This skill never launches the app and never polls.
+description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server (57 tools) — projects, track gain/pan/mute/solo/fold, beat grid, metronome, practice sections, chords, waveform peaks, WAV slices — plus a complete lyrics chain from one sentence. "find the lyrics", "identify this song's lyrics", "搜歌词 / 找歌词 / 识别歌词", "word-by-word", "逐词歌词 / 卡拉OK歌词 / 歌词打轴", "the lyrics are out of sync" all run search → pick the recording → (use the catalog text or transcribe the vocal stem yourself) → time the words → import → verify → offset, defaulting to word-level output. The app has no ASR by design — `track_audio_slice` hands out the isolated vocal, the agent writes the lyrics back. Also use for "set the BPM to 92", "mute the bass", "solo the drums", "pan the lead guitar left", "chorus from 1:12 to 1:36", "down two semitones", "show me the drums waveform", "export 12 to 24 seconds", "read the lyrics", "import these lyrics", "shift the lyrics 0.3s". Requires SplitJam running with Settings → MCP Server on; this skill connects through its own scripts/mcp.py using the token from Settings, so no client MCP config is needed. It never launches the app and never polls.
 metadata:
-  version: "1.1.0"
+  version: "1.2.0"
   requires: SplitJam with the MCP server (schema 3, 57 tools)
 ---
 
@@ -78,7 +78,10 @@ printf %s '<token>' > ~/.config/splitjam/token && chmod 600 ~/.config/splitjam/t
 ```
 
 `doctor` answers "which part is broken" without guesswork; `health`, `tools`, `call` and
-`snapshot` are the other subcommands. If the user's client speaks MCP natively and they would
+`snapshot` are the other subcommands. `call` also writes any returned audio block to
+`~/.cache/splitjam/audio/` and prints the path (`--audio-dir DIR` to move it, `--no-audio` to
+drop it) — a shell cannot hand an MCP audio block to a model, and that file is what the lyrics
+work in §4.1 listens to. If the user's client speaks MCP natively and they would
 rather see typed tools in the sidebar, registering the same URL plus an
 `Authorization: Bearer <token>` header also works — but it is optional, and this skill never
 depends on it.
@@ -149,14 +152,65 @@ server name (`mcp__splitjam__track_gain`). Arguments are shown as JSON.
 | "show me the drums waveform" | `track_audio_peaks {track:"stem:drums", buckets:800}` | |
 | "export 12 to 24 seconds" | `track_audio_slice {track:"stem:drums", range:"12-24"}` | the app renders the WAV and returns it **as an audio content block** in the same result (≤8 MB; below that, one result carries both the envelope and the bytes) |
 | "what are the chords" / "write Am on bar 2" | `chord_get` / `chord_note_set {bar:2, text:"Am"}` | the note is anchored to the **bar start in seconds**, not the bar number |
-| "give me the lyrics" | `lyrics_get {format:"lrc"}` | read-only; `json` / `lrc` / `plain` |
-| "find lyrics for this song" | `lyrics_search {query:"羽毛鳞刺", artist:"Dear Jane", index:0}` | read-only but uses the network; `index` also returns full text ready to import |
+| "give me the lyrics" | `lyrics_get {format:"lrc"}` | read-only; `json` / `lrc` / `plain`. `lrc` returns the sheet **in its own format**, word tags included |
+| "find lyrics for this song" | see §4.1 — never a bare `lyrics_search` | the search is step 2 of 7, not the answer |
 | "import these lyrics" | `lyrics_import {project:"<id>", text:"<lrc>"}` | replaces existing lyrics; supports `dryRun` / `expectRevision` |
 | "shift the lyrics 0.3s later" | `lyrics_offset {delta:0.3}` | exactly one of `offset` (absolute), `delta`, `reset:true` |
 | "which file is this track" | `track_audio_file {track:"<track>"}` | |
 | "can I use high-precision separation" | `entitlement_get` → `stem_split_pro.allowed` | if not, say it is Pro-only and name the free tiers |
 | "how many separations left" | `entitlement_get` → `weekly_separation_limit` | report remaining + `resets_at` |
 | "what can you do" | `capabilities` | op list with `requires`, `constraint`, `permission`, `allowed` — cheaper and more accurate than guessing |
+
+### 4.1 Lyrics: one sentence in, a finished sheet out
+
+Any of "find the lyrics", "identify this song's lyrics", "搜歌词 / 找歌词 / 识别歌词", "get me
+word-by-word", "逐词歌词 / 卡拉OK歌词 / 歌词打轴", or "the lyrics are out of sync" is **one job
+with one default chain**. Do not interview the user about the source, the result or the
+format — the choices are already made. Four routes, in order, stop at the first that lands
+word-level.
+
+**The app has no ASR — transcribing is your job.** It gives you the isolated vocal stem and
+takes back whatever lyrics text you write.
+
+| Route | When | Cost |
+| --- | --- | --- |
+| L0 | `lyrics_get` already has `wordCount > 0` | one call — report, do not replace |
+| L1 | `lyrics_search` returns `wordEnhanced` / `wordStandard` | two calls |
+| L2 | catalog has the words at line level → **keep its text, time it yourself** from the stem | a few audio calls |
+| L3 | nothing usable online → transcribe the vocal stem yourself | one 60 s slice per minute |
+| L4 | no audio path at all (client drops audio blocks) and nothing online is timed | honest line-level, say why |
+
+```text
+lyrics_get    { format: "json" }
+lyrics_search { project: "<id>", limit: 10 }
+lyrics_search { project: "<id>", index: <best> }        # text + detectedFormat
+track_audio_slice { track: "stem:vocals", range: "0-60", mono: true }   # 60 s, 2 s overlap
+lyrics_import { project: "<id>", text: "<lrc>", dryRun: true }          # only when replacing
+lyrics_import { project: "<id>", text: "<lrc>" }
+lyrics_get    { project: "<id>", format: "json" }       # verify wordCount / format
+lyrics_offset { project: "<id>", delta: -0.4, expectRevision: "<rev>" } # only if timing is off
+```
+
+- **Word-level is the default output, and the report names its provenance** — `searched`,
+  `transcribed by the agent`, or `catalog text, agent-timed`.
+- **Slices are capped at 8 MiB inline**: 60 s mono is safe (~5.3 MB), 2 minutes is not. Overlap
+  consecutive slices by 2 s, drop the duplicated seam line, and add the slice start to every
+  local time. `mcp.py call` writes the WAV to `~/.cache/splitjam/audio/` and prints the path —
+  that file (or the native `audio` block) is what you listen to.
+- **Line times come from the transcriber, word times are computed.** Distributing a line across
+  its characters is the baseline; snapping the starts to `track_audio_peaks` is the upgrade.
+  The report says `aligned`, never "recognised syllable by syllable".
+- **Never fabricate a line-level sheet into word tags** to make `wordCount` non-zero, and never
+  silently replace hand-timed lyrics (existing `wordCount > 0` + no "redo / replace" in the
+  request → report and stop).
+- **Match the recording, not just the title.** Rank results by duration first (≤5 s off the
+  project's), then exact title (skip `live` / `cover` / `remix` / `instrumental`), then source.
+- **One offset correction per session.** "0.4 s late" means the words move earlier:
+  `delta: -0.4`. Two rounds means the time base is wrong — re-check the slice start instead.
+
+Report four lines: what landed (format, line count, word count), the project, where the words
+and the timing came from, the undo. Full decision tables, the word-level grammar, the slicing
+budget, the timing recipe and the failure branches live in `references/lyrics.md`.
 
 ### Project and track references
 
@@ -211,6 +265,9 @@ These exist in the catalog as `implemented: false`, so they are **not exposed as
 Say so instead of improvising:
 
 - separation and audio import — do it in the app (lyrics import **is** supported: `lyrics_import`)
+- transcription inside the app — there is no ASR, and no "recognise lyrics" button to wait
+  for. **You** transcribe: `track_audio_slice` hands out the vocal stem, `lyrics_import` takes
+  the text back (§4.1)
 - chord recognition — only the in-app button triggers it
 - user track creation, nested tracks, asset replacement
 - stem/mix export, audio-to-MIDI, staff/tab scores
@@ -225,7 +282,7 @@ Say so instead of improvising:
 - `references/contracts.md` — transport, auth, permission tiers, envelopes, error codes, warnings, revisions
 - `references/tracks.md` — reference resolution, gain clamping, fold vs mute
 - `references/beats.md` — the four beat layers and the three traps
-- `references/lyrics.md` — all four lyrics tools: search / get / import / offset, with parameter and result shapes
+- `references/lyrics.md` — the whole lyrics chain: what is possible, how to pick a result, the two word-level grammars, the estimation recipe, offset semantics, failure branches
 - `references/recipes.md` — copy-paste playbooks (retime a song, cut sections, start from scratch)
 - `scripts/doctor.sh` — one-shot health check translated into plain language
 - `scripts/snapshot.sh` — save a JSON snapshot of a project before changing it

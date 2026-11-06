@@ -9,6 +9,13 @@ gain/pan/mute/solo/fold, retune the beat grid, run the metronome, manage practic
 edit chords and bar notes, search/read/import lyrics and shift their global offset, export
 waveform peaks and WAV slices.
 
+Its lyrics track is written as one chain, not four tools: "find the lyrics", "identify this
+song's lyrics", "give me word-by-word", "歌词对不上" all run the same
+search → pick the right recording → (catalog text, or transcribe the vocal stem yourself) →
+time the words → import → verify → offset sequence. The app has no ASR on purpose — the agent
+listens to `track_audio_slice` output and writes the lyrics back — and the output defaults to
+word-level.
+
 There is nothing else to install. The app hosts the server itself
 (`http://127.0.0.1:48321/mcp`, 57 tools, Streamable HTTP) and the skill talks to it through
 `scripts/mcp.py` — **no MCP client config to write, nothing to restart**. Registering the same
@@ -57,10 +64,10 @@ splitjam_skill/                 # the repo root is the skill
 │   ├── contracts.md            # transport, auth, permission tiers, envelopes, error codes
 │   ├── tracks.md               # reference resolution, clamping, fold vs mute
 │   ├── beats.md                # the four beat layers
-│   ├── lyrics.md               # all four lyrics tools (search / get / import / offset)
+│   ├── lyrics.md               # the whole lyrics chain: capability boundary, picking a result, word-level grammar, estimation, offsets
 │   └── recipes.md              # copy-paste playbooks
 └── scripts/
-    ├── mcp.py                  # handshake + tools/call, no dependencies beyond python3
+    ├── mcp.py                  # handshake + tools/call; audio slices land in ~/.cache/splitjam/audio
     ├── doctor.sh               # health check rendered as plain language
     ├── snapshot.sh             # JSON snapshot of a project before changing it
     └── gen-tools.sh            # regenerate references/tools.md from a running app

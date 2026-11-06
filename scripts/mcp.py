@@ -15,7 +15,14 @@ cases where a client cannot be configured, or where something is wrong and
     ./mcp.py call project_list
     ./mcp.py call track_gain '{"track":"stem:bass","value":0.8}'
     ./mcp.py call track_gain track=stem:bass value=0.8
+    ./mcp.py call track_audio_slice '{"track":"stem:vocals","range":"0-60","mono":true}' --audio-dir /tmp/splitjam
     ./mcp.py snapshot [project] [--out DIR]
+
+`track_audio_slice` returns the WAV as a second MCP content block. A shell client
+cannot hand that block to a model, so `call` writes it to disk and prints the path
+(`~/.cache/splitjam/audio` by default, override with `--audio-dir DIR` or
+`$SPLITJAM_AUDIO_DIR`, disable with `--no-audio`). That file is what a transcription
+step — or the user's own player — picks up.
 
 Token lookup, first hit wins: --token, $SPLITJAM_TOKEN, ~/.config/splitjam/token.
 The app keeps the real token inside its own sandbox; copy it once from
@@ -29,15 +36,19 @@ Exit codes are for humans and shells only — the app no longer reports any:
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import os
 import pathlib
 import sys
+import time
 import urllib.error
 import urllib.request
 
 DEFAULT_URL = "http://127.0.0.1:48321/mcp"
 DEFAULT_HEALTH = "http://127.0.0.1:48321/health"
+DEFAULT_AUDIO_DIR = "~/.cache/splitjam/audio"
 TOKEN_FILE = pathlib.Path.home() / ".config" / "splitjam" / "token"
 PROTOCOL_VERSION = "2025-06-18"
 CLIENT_INFO = {"name": "splitjam-skill", "version": "1.0.0"}
@@ -232,6 +243,46 @@ def cmd_tools(args) -> int:
     return 0
 
 
+def audio_dir_for(args) -> pathlib.Path:
+    return pathlib.Path(
+        args.audio_dir or os.environ.get("SPLITJAM_AUDIO_DIR") or DEFAULT_AUDIO_DIR
+    ).expanduser()
+
+
+def save_audio_parts(parts: list[dict], envelope: dict | None, tool: str, directory: pathlib.Path) -> None:
+    """Write every audio content block to disk and print where it landed.
+
+    The app already wrote the WAV into its own container, but that path is outside the
+    sandbox and unreadable here. This is the only copy a transcription step can use.
+    """
+    for part in parts:
+        if part.get("type") != "audio":
+            continue
+        data = part.get("data") or ""
+        mime = part.get("mimeType") or "audio/wav"
+        if not data:
+            print(f"[audio {mime}: empty payload]", file=sys.stderr)
+            continue
+        try:
+            raw = base64.b64decode("".join(data.split()), validate=True)
+        except (binascii.Error, ValueError):
+            # A truncated base64 body is a transport problem, not a tool error: say so
+            # instead of writing a half WAV that later decodes to silence.
+            print(f"[audio {mime}: base64 payload did not decode — not saved]", file=sys.stderr)
+            continue
+        suffix = ".wav" if "wav" in mime else ".bin"
+        # The envelope nests tool output under `result`, so the slice's own file name —
+        # which carries track and range — lives one level down.
+        bodies = (envelope or {}).get("result") or {}
+        name = bodies.get("file") or f"{tool}-{int(time.time())}{suffix}"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / pathlib.Path(name).name
+        path.write_bytes(raw)
+        duration = bodies.get("duration")
+        span = f"{duration:.1f}s, " if isinstance(duration, (int, float)) else ""
+        print(f"audio    {path} ({span}{len(raw) / 1_000_000:.2f} MB)")
+
+
 def cmd_call(args) -> int:
     arguments = parse_arguments(args.arguments)
     client = Client(args.url, find_token(args.token))
@@ -243,10 +294,13 @@ def cmd_call(args) -> int:
     else:
         for text in texts:
             print(text)
-    for part in others:
-        if part.get("type") == "audio":
-            data = part.get("data") or ""
-            print(f"[audio {part.get('mimeType', 'audio/wav')}, {len(data) * 3 // 4} bytes as base64]", file=sys.stderr)
+    if args.no_audio:
+        for part in others:
+            if part.get("type") == "audio":
+                data = part.get("data") or ""
+                print(f"[audio {part.get('mimeType', 'audio/wav')}, {len(data) * 3 // 4} bytes as base64, not saved]", file=sys.stderr)
+    else:
+        save_audio_parts(others, envelope, args.tool, audio_dir_for(args))
     return 1 if result.get("isError") else 0
 
 
@@ -477,6 +531,11 @@ def main() -> int:
     call_parser = sub.add_parser("call", help="tools/call")
     call_parser.add_argument("tool")
     call_parser.add_argument("arguments", nargs="*")
+    call_parser.add_argument("--audio-dir", default=None,
+                             help="where returned audio content blocks are written "
+                                  "(default ~/.cache/splitjam/audio, or $SPLITJAM_AUDIO_DIR)")
+    call_parser.add_argument("--no-audio", action="store_true",
+                             help="discard audio content blocks instead of saving them")
 
     sub.add_parser("doctor", help="presence, token, permission, tool count")
 
