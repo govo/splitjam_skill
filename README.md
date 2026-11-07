@@ -38,6 +38,12 @@ tier) and the fix. A healthy one ends with `ok ready to work.`
 
 ## Install the skill
 
+Public repo: **https://github.com/govo/splitjam_skill**
+
+```bash
+git clone https://github.com/govo/splitjam_skill.git && cd splitjam_skill
+```
+
 The repo root is the skill, so point the skill directory straight at this checkout.
 
 ### Symlink (development — edits take effect immediately)
@@ -52,7 +58,9 @@ ln -sfn "$PWD" ~/.workbuddy/skills/splitjam
 cp -R . ~/.workbuddy/skills/splitjam
 ```
 
-Either way the skill shows up as `splitjam` in the skill settings.
+Either way the skill shows up as `splitjam` in the skill settings. `SKILL.md` §1 carries
+the same install steps, for an agent that loads the skill without ever reading this README —
+the copyable prompt in the app's empty lyrics panel points at that section.
 
 ## Structure
 

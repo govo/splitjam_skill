@@ -1,8 +1,8 @@
 ---
 name: splitjam
-description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server (57 tools) — projects, track gain/pan/mute/solo/fold, beat grid, metronome, practice sections, chords, waveform peaks, WAV slices — plus a complete lyrics chain from one sentence. "find the lyrics", "identify this song's lyrics", "搜歌词 / 找歌词 / 识别歌词", "word-by-word", "逐词歌词 / 卡拉OK歌词 / 歌词打轴", "the lyrics are out of sync" all run search → pick the recording → (use the catalog text or transcribe the vocal stem yourself) → time the words → import → verify → offset, defaulting to word-level output. The app has no ASR by design — `track_audio_slice` hands out the isolated vocal, the agent writes the lyrics back. Also use for "set the BPM to 92", "mute the bass", "solo the drums", "pan the lead guitar left", "chorus from 1:12 to 1:36", "down two semitones", "show me the drums waveform", "export 12 to 24 seconds", "read the lyrics", "import these lyrics", "shift the lyrics 0.3s". Requires SplitJam running with Settings → MCP Server on; this skill connects through its own scripts/mcp.py using the token from Settings, so no client MCP config is needed. It never launches the app and never polls.
+description: Drive the running SplitJam / StemsPlayer app on macOS over its local MCP server (57 tools) — projects, track gain/pan/mute/solo/fold, beat grid, metronome, practice sections, chords, waveform peaks, WAV slices — plus a complete lyrics chain from one sentence. "find the lyrics", "identify this song's lyrics", "搜歌词 / 找歌词 / 识别歌词", "word-by-word", "逐词歌词 / 卡拉OK歌词 / 歌词打轴", "the lyrics are out of sync" all run search → pick the recording → (use the catalog text or transcribe the vocal stem yourself) → time the words → import → verify → offset, defaulting to word-level output. The app has no ASR by design — `track_audio_slice` hands out the isolated vocal, the agent writes the lyrics back. Also use for "set the BPM to 92", "mute the bass", "solo the drums", "pan the lead guitar left", "chorus from 1:12 to 1:36", "down two semitones", "show me the drums waveform", "export 12 to 24 seconds", "read the lyrics", "import these lyrics", "shift the lyrics 0.3s". Requires SplitJam running with Settings → MCP Server on; this skill connects through its own scripts/mcp.py using the token from Settings, so no client MCP config is needed. A prompt copied from the app's empty lyrics panel ("Use the `splitjam` skill") is this same lyrics job with the project already named. It never launches the app and never polls.
 metadata:
-  version: "1.2.0"
+  version: "1.3.0"
   requires: SplitJam with the MCP server (schema 3, 57 tools)
 ---
 
@@ -48,7 +48,29 @@ not a flaky failure, it is a missing precondition.
    retry the same call, and never dodge the limit — no lower tier, no splitting one
    multi-stem export into ten single-stem ones.
 
-## 1. Connecting (and diagnosing a broken connection)
+## 1. Installing the skill, then connecting
+
+### If this client does not have the skill yet
+
+SplitJam's empty lyrics panel hands the user a prompt that starts "Use the `splitjam` skill
+(install it first if this client does not have it)" and carries this repo's URL. The repo is
+public: **https://github.com/govo/splitjam_skill**. Install it through this client's skill
+manager, or clone it — the repo root **is** the skill (`SKILL.md`, `references/`,
+`scripts/`):
+
+```bash
+git clone https://github.com/govo/splitjam_skill.git
+ln -sfn "$PWD/splitjam_skill" ~/.workbuddy/skills/splitjam   # symlink; edits land immediately
+# or: cp -R "$PWD/splitjam_skill" ~/.workbuddy/skills/splitjam
+```
+
+Use the client's own skills directory when it is not `~/.workbuddy/skills`. There is nothing
+else to install: no CLI, no package, no MCP server config — `scripts/mcp.py` is stdlib-only
+and the app hosts the server itself. Once installed, **the lyrics chain is §4.1 below**
+(details in `references/lyrics.md`); the copied prompt is not a separate workflow, it only
+names the project. Token setup follows.
+
+### Connecting
 
 The app hosts the server; **this skill talks to it**. `scripts/mcp.py` is a ~500-line
 stdlib-only client that does the handshake, keeps the session, and calls tools. Nothing goes
@@ -211,6 +233,25 @@ lyrics_offset { project: "<id>", delta: -0.4, expectRevision: "<rev>" } # only i
 Report four lines: what landed (format, line count, word count), the project, where the words
 and the timing came from, the undo. Full decision tables, the word-level grammar, the slicing
 budget, the timing recipe and the failure branches live in `references/lyrics.md`.
+
+### A prompt copied from the app's empty lyrics panel
+
+When a project has no lyrics, the app offers a copyable prompt. It starts "Use the `splitjam`
+skill …" and carries a `Project:` line with a quoted name, an optional `id <UUID>` and an
+optional duration. **Treat it as this same job, not as a new specification** — those lines
+only supply the target project; they deliberately do not restate the chain, the word-level
+grammar or the slice budget.
+
+- `id <UUID>` → pass that UUID as `project` on every call. No id (a prompt copied on
+  iPhone) → `project_list`, then match by exact name; duration breaks ties. The phone and
+  the Mac keep separate libraries with different ids, so never carry an iPhone id across and
+  never ask the user for one.
+- Run the chain above **as written**: `lyrics_get` first, then `lyrics_search`, then the
+  vocal stem. Do not start at `project_get` + `track_audio_slice` because an older prompt
+  spelled out tool calls — that skips the catalog routes L1/L2 and forces a full transcription.
+- End with `lyrics_import` writing word-level lyrics into that project, then verify and
+  report. If the app is not running or the server is off, say so per §5; nothing was modified.
+- If this client has no `splitjam` skill, the prompt asks for it — install per §1 first.
 
 ### Project and track references
 

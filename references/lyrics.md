@@ -5,6 +5,11 @@ lyrics", "give me word-by-word so the highlight follows the voice", "the lyrics 
 late" — all of them resolve to the same chain in §2. The defaults are already decided there;
 do not open with a questionnaire about which source, which result or which format.
 
+A prompt copied from SplitJam's empty lyrics panel ("Use the `splitjam` skill …" plus a
+`Project:` line) is this same job with the target already named — see `SKILL.md` §4.1,
+"A prompt copied from the app's empty lyrics panel", for resolving the project. It is not a
+new workflow: run the chain in §2 as written.
+
 The house default is **word-level**. Line-level is a downgrade you have to justify.
 
 ## 0. Who listens, who writes
